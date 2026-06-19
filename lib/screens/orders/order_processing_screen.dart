@@ -42,12 +42,30 @@ class _OrderProcessingScreenState extends State<OrderProcessingScreen>
 
   Future<void> _createOrder() async {
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw 'User not logged in';
+
+      setState(() => _statusText = "Getting your details...");
+
+      // Fetch actual fullName from users collection
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      final userData = userDoc.data();
+      final fullName = userData?['fullName'] ?? user.displayName ?? 'Customer';
+      final phone = userData?['phone'] ?? user.phoneNumber ?? '';
+
+      setState(() => _statusText = "Placing your order...");
+
       final orderRef = await FirebaseFirestore.instance.collection('orders').add({
         'status': 'pending',
         'total': widget.orderTotal,
         'deliveryAddress': widget.deliveryAddress,
-        'customerId': FirebaseAuth.instance.currentUser?.uid,
-        'customerName': FirebaseAuth.instance.currentUser?.displayName ?? 'Customer',
+        'customerId': user.uid,
+        'customerName': fullName, // Now uses real name from users doc
+        'customerPhone': phone,
         'items': widget.cartItems.map((e) => {
           'name': e.menuItem.name,
           'quantity': e.quantity,

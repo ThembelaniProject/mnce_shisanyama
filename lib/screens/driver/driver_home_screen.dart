@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:rxdart/rxdart.dart';
 import '../../core/theme/app_theme.dart';
 import 'driver_profile_screen.dart';
 
@@ -23,12 +24,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
   }
 
-  Stream<QuerySnapshot> _ordersStream() {
-    return FirebaseFirestore.instance
-      .collection('orders')
-      .where('status', whereIn: ['packing_up', 'ready_for_driver', 'awaiting_final_dispatch', 'on_the_way'])
-      .orderBy('createdAt', descending: true)
-      .snapshots();
+  // SPLIT QUERY TO AVOID PERMISSION DENIED
+  Stream<List<QueryDocumentSnapshot>> _ordersStream() {
+    if (uid == null) return Stream.value([]);
+
+    // Stream 1: Unassigned orders all drivers can see
+    final availableStream = FirebaseFirestore.instance
+       .collection('orders')
+       .where('status', whereIn: ['packing_up', 'ready_for_driver'])
+       .orderBy('createdAt', descending: true)
+       .snapshots();
+
+    // Stream 2: Orders assigned to this driver only
+    final myStream = FirebaseFirestore.instance
+       .collection('orders')
+       .where('assignedDriver', isEqualTo: uid)
+       .where('status', whereIn: ['awaiting_final_dispatch', 'on_the_way'])
+       .orderBy('createdAt', descending: true)
+       .snapshots();
+
+    return Rx.combineLatest2(
+      availableStream,
+      myStream,
+      (QuerySnapshot available, QuerySnapshot mine) {
+        final allDocs = [...available.docs,...mine.docs];
+        allDocs.sort((a, b) {
+          final aTime = (a.data() as Map)['createdAt'] as Timestamp?;
+          final bTime = (b.data() as Map)['createdAt'] as Timestamp?;
+          return (bTime?? Timestamp(0, 0)).compareTo(aTime?? Timestamp(0, 0));
+        });
+        return allDocs;
+      },
+    );
   }
 
   Future<void> _toggleOnlineStatus(bool value) async {
@@ -138,6 +165,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
+  void _goToDeliveryHistory() {
+    if (uid == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => DriverDeliveryHistoryScreen(driverId: uid!)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (uid == null) {
@@ -218,15 +253,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    _buildStatCard('Deliveries', deliveries.toString(), Icons.local_shipping),
+                    _buildStatCard('Deliveries', deliveries.toString(), Icons.local_shipping, _goToDeliveryHistory),
                     const SizedBox(width: 12),
-                    _buildStatCard('Rating', rating.toStringAsFixed(1), Icons.star),
+                    _buildStatCard('Rating', rating.toStringAsFixed(1), Icons.star, null),
                   ],
                 ),
                 const SizedBox(height: 24),
                 const Text('Active Orders', style: TextStyle(color: AppTheme.whitePure, fontSize: 20, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                StreamBuilder<QuerySnapshot>(
+                StreamBuilder<List<QueryDocumentSnapshot>>(
                   stream: _ordersStream(),
                   builder: (context, orderSnap) {
                     if (!isOnline) {
@@ -241,25 +276,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                       return _buildEmptyState(Icons.error_outline, 'Error: ${orderSnap.error}');
                     }
 
-                    if (!orderSnap.hasData || orderSnap.data!.docs.isEmpty) {
+                    if (!orderSnap.hasData || orderSnap.data!.isEmpty) {
                       return _buildEmptyState(Icons.inbox_outlined, 'No active orders');
                     }
 
-                    final orders = orderSnap.data!.docs.where((doc) {
-                      final data = doc.data() as Map<String, dynamic>;
-                      final assignedDriver = data['assignedDriver'];
-                      final status = data['status'];
-
-                      if (status == 'packing_up' || status == 'ready_for_driver') {
-                        return assignedDriver == null; // Show unassigned orders
-                      } else {
-                        return assignedDriver == uid; // Show only orders assigned to me
-                      }
-                    }).toList();
-
-                    if (orders.isEmpty) {
-                      return _buildEmptyState(Icons.inbox_outlined, 'No orders available');
-                    }
+                    final orders = orderSnap.data!;
 
                     return ListView.builder(
                       shrinkWrap: true,
@@ -296,20 +317,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: AppTheme.braaiCoalSurface, borderRadius: BorderRadius.circular(12)),
-        child: Column(
-          children: [
-            Icon(icon, color: AppTheme.braaiFireOrange, size: 28),
-            const SizedBox(height: 8),
-            Text(value, style: const TextStyle(color: AppTheme.whitePure, fontSize: 24, fontWeight: FontWeight.bold)),
-            Text(label, style: const TextStyle(color: AppTheme.softAshGray, fontSize: 12)),
-          ],
-        ),
+  Widget _buildStatCard(String label, String value, IconData icon, VoidCallback? onTap) {
+    final card = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.braaiCoalSurface,
+        borderRadius: BorderRadius.circular(12),
+        border: onTap!= null? Border.all(color: AppTheme.braaiFireOrange.withOpacity(0.3)) : null,
       ),
+      child: Column(
+        children: [
+          Icon(icon, color: AppTheme.braaiFireOrange, size: 28),
+          const SizedBox(height: 8),
+          Text(value, style: const TextStyle(color: AppTheme.whitePure, fontSize: 24, fontWeight: FontWeight.bold)),
+          Text(label, style: const TextStyle(color: AppTheme.softAshGray, fontSize: 12)),
+        ],
+      ),
+    );
+
+    return Expanded(
+      child: onTap!= null
+         ? InkWell(onTap: onTap, borderRadius: BorderRadius.circular(12), child: card)
+          : card,
     );
   }
 
@@ -322,7 +351,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final isAssignedToMe = assignedDriver == uid;
 
     String buttonText = 'Accept Order';
-    Color statusColor = Colors.orange;
+    Color statusColor = Colors.blue;
     VoidCallback? onPressed;
     bool showMapButton = false;
 
@@ -465,5 +494,113 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
   void dispose() {
     cameraController.dispose();
     super.dispose();
+  }
+}
+
+class DriverDeliveryHistoryScreen extends StatelessWidget {
+  final String driverId;
+  const DriverDeliveryHistoryScreen({super.key, required this.driverId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppTheme.braaiCharcoalDark,
+      appBar: AppBar(
+        backgroundColor: AppTheme.braaiCoalSurface,
+        title: const Text('Delivery History', style: TextStyle(color: AppTheme.whitePure)),
+        iconTheme: const IconThemeData(color: AppTheme.whitePure),
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+           .collection('orders')
+           .where('assignedDriver', isEqualTo: driverId)
+           .where('status', isEqualTo: 'delivered')
+           .orderBy('deliveredAt', descending: true)
+           .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: AppTheme.braaiFireOrange));
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Error: ${snapshot.error}',
+                  style: const TextStyle(color: AppTheme.softAshGray),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.history, size: 64, color: AppTheme.softAshGray),
+                  SizedBox(height: 16),
+                  Text('No deliveries yet', style: TextStyle(color: AppTheme.softAshGray, fontSize: 16)),
+                ],
+              ),
+            );
+          }
+
+          final deliveries = snapshot.data!.docs;
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: deliveries.length,
+            itemBuilder: (context, index) {
+              final data = deliveries[index].data() as Map<String, dynamic>;
+              final orderId = deliveries[index].id;
+              final customerName = data['customerName']?? 'Customer';
+              final address = data['deliveryAddress']?? 'No address';
+              final total = data['total']?.toDouble()?? 0.0;
+              final deliveredAt = (data['deliveredAt'] as Timestamp?)?.toDate();
+
+              return Card(
+                color: AppTheme.braaiCoalSurface,
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Colors.green,
+                    child: Icon(Icons.check, color: Colors.white),
+                  ),
+                  title: Text(
+                    'Order #${orderId.substring(0, 6)}',
+                    style: const TextStyle(color: AppTheme.whitePure, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(customerName, style: const TextStyle(color: AppTheme.softAshGray)),
+                      Text(
+                        address,
+                        style: const TextStyle(color: AppTheme.softAshGray, fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (deliveredAt!= null)
+                        Text(
+                          '${deliveredAt.day}/${deliveredAt.month}/${deliveredAt.year} ${deliveredAt.hour}:${deliveredAt.minute.toString().padLeft(2, '0')}',
+                          style: const TextStyle(color: AppTheme.softAshGray, fontSize: 11),
+                        ),
+                    ],
+                  ),
+                  trailing: Text(
+                    'R${total.toStringAsFixed(2)}',
+                    style: const TextStyle(color: AppTheme.braaiFireOrange, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 }

@@ -18,7 +18,6 @@ class _ShisanyamaMainScreenState extends State<ShisanyamaMainScreen> {
 
   final List<Widget> _screens = [
     const MenuScreen(),
-    const CartScreen(deliveryAddress: '',),
     const OrderHistoryScreen(),
   ];
 
@@ -36,10 +35,7 @@ class _ShisanyamaMainScreenState extends State<ShisanyamaMainScreen> {
             icon: Icon(Icons.restaurant_menu),
             label: 'Braai Menu',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.shopping_cart_outlined),
-            label: 'Basket',
-          ),
+         
           NavigationDestination(
             icon: Icon(Icons.history),
             label: 'Orders',

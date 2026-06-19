@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:mobile_scanner/mobile_scanner.dart'; // Add this
-import '../../../core/theme/app_theme.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../core/theme/app_theme.dart';
 import 'driver_profile_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
@@ -25,15 +25,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Stream<QuerySnapshot> _ordersStream() {
     return FirebaseFirestore.instance
-   .collection('orders')
-   .where('status', whereIn: ['ready_for_pickup', 'packing_up', 'on_the_way'])
-   .orderBy('createdAt', descending: true)
-   .snapshots();
+      .collection('orders')
+      .where('status', whereIn: ['packing_up', 'ready_for_driver', 'awaiting_final_dispatch', 'on_the_way'])
+      .orderBy('createdAt', descending: true)
+      .snapshots();
   }
 
   Future<void> _toggleOnlineStatus(bool value) async {
     if (uid == null) return;
-    
+
     setState(() {
       _localOnlineState = value;
     });
@@ -63,26 +63,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   Future<void> _acceptOrder(String orderId) async {
     if (uid == null) return;
     final user = FirebaseAuth.instance.currentUser;
-    
-    await FirebaseFirestore.instance.collection('orders').doc(orderId).update({
-      'status': 'packing_up',
-      'driverId': uid,
-      'driverName': user?.displayName?? 'Driver',
-      'driverPhone': user?.phoneNumber?? '',
-      'acceptedAt': FieldValue.serverTimestamp(),
-    });
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Order accepted! Waiting for staff to dispatch'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+    try {
+      await FirebaseFirestore.instance.collection('orders').doc(orderId).update({
+        'status': 'awaiting_final_dispatch',
+        'assignedDriver': uid,
+        'assignedDriverName': userDoc.data()?['fullName']?? user?.displayName?? 'Driver',
+        'driverPhone': user?.phoneNumber?? '',
+        'acceptedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Order accepted! Waiting for staff handover'), backgroundColor: Colors.orange),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
-  // New: Scan QR to confirm delivery
   Future<void> _scanQRAndDeliver(String orderId) async {
     final result = await Navigator.push(
       context,
@@ -90,23 +95,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     );
 
     if (result == true && mounted) {
-      await FirebaseFirestore.instance.collection('orders').doc(orderId).update({
-        'status': 'delivered',
-        'deliveredAt': FieldValue.serverTimestamp(),
-      });
-
-      if (uid!= null) {
-        await FirebaseFirestore.instance.collection('users').doc(uid).update({
-          'deliveries': FieldValue.increment(1),
+      try {
+        await FirebaseFirestore.instance.collection('orders').doc(orderId).update({
+          'status': 'delivered',
+          'deliveredAt': FieldValue.serverTimestamp(),
         });
-      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('QR verified! Order delivered'),
-          backgroundColor: Colors.green,
-        ),
-      );
+        if (uid!= null) {
+          await FirebaseFirestore.instance.collection('users').doc(uid).update({
+            'deliveries': FieldValue.increment(1),
+          });
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('QR verified! Order delivered'), backgroundColor: Colors.green),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -169,7 +177,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Status Card
                 GestureDetector(
                   onTap: _goToProfile,
                   child: Container(
@@ -177,10 +184,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     decoration: BoxDecoration(
                       color: AppTheme.braaiCoalSurface,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: isOnline? Colors.green : AppTheme.softAshGray,
-                        width: 2,
-                      ),
+                      border: Border.all(color: isOnline? Colors.green : AppTheme.softAshGray, width: 2),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -199,34 +203,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Hi, $fullName',
-                                    style: const TextStyle(
-                                      color: AppTheme.whitePure,
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.bold,
-                                    )),
+                                Text('Hi, $fullName', style: const TextStyle(color: AppTheme.whitePure, fontSize: 22, fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 4),
-                                Text(isOnline? 'You are Online' : 'You are Offline',
-                                    style: TextStyle(
-                                      color: isOnline? Colors.green : AppTheme.softAshGray,
-                                      fontSize: 14,
-                                    )),
+                                Text(isOnline? 'You are Online' : 'You are Offline', style: TextStyle(color: isOnline? Colors.green : AppTheme.softAshGray, fontSize: 14)),
                               ],
                             ),
                           ],
                         ),
-                        Switch(
-                          value: isOnline,
-                          activeColor: Colors.green,
-                          onChanged: _toggleOnlineStatus,
-                        ),
+                        Switch(value: isOnline, activeColor: Colors.green, onChanged: _toggleOnlineStatus),
                       ],
                     ),
                   ),
                 ),
                 const SizedBox(height: 16),
-
-                // Stats Row
                 Row(
                   children: [
                     _buildStatCard('Deliveries', deliveries.toString(), Icons.local_shipping),
@@ -235,16 +224,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                   ],
                 ),
                 const SizedBox(height: 24),
-
-                // Active Orders
-                const Text('Active Orders',
-                    style: TextStyle(
-                      color: AppTheme.whitePure,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    )),
+                const Text('Active Orders', style: TextStyle(color: AppTheme.whitePure, fontSize: 20, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-
                 StreamBuilder<QuerySnapshot>(
                   stream: _ordersStream(),
                   builder: (context, orderSnap) {
@@ -253,12 +234,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     }
 
                     if (orderSnap.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(20),
-                          child: CircularProgressIndicator(color: AppTheme.braaiFireOrange),
-                        ),
-                      );
+                      return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: AppTheme.braaiFireOrange)));
                     }
 
                     if (orderSnap.hasError) {
@@ -271,13 +247,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
                     final orders = orderSnap.data!.docs.where((doc) {
                       final data = doc.data() as Map<String, dynamic>;
-                      final driverId = data['driverId'];
+                      final assignedDriver = data['assignedDriver'];
                       final status = data['status'];
-                      
-                      if (status == 'ready_for_pickup') {
-                        return driverId == null;
+
+                      if (status == 'packing_up' || status == 'ready_for_driver') {
+                        return assignedDriver == null; // Show unassigned orders
                       } else {
-                        return driverId == uid;
+                        return assignedDriver == uid; // Show only orders assigned to me
                       }
                     }).toList();
 
@@ -309,19 +285,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: AppTheme.braaiCoalSurface,
-        borderRadius: BorderRadius.circular(12),
-      ),
+      decoration: BoxDecoration(color: AppTheme.braaiCoalSurface, borderRadius: BorderRadius.circular(12)),
       child: Column(
         children: [
           Icon(icon, size: 48, color: AppTheme.softAshGray),
           const SizedBox(height: 12),
-          Text(
-            text,
-            style: const TextStyle(color: AppTheme.softAshGray, fontSize: 16),
-            textAlign: TextAlign.center,
-          ),
+          Text(text, style: const TextStyle(color: AppTheme.softAshGray, fontSize: 16), textAlign: TextAlign.center),
         ],
       ),
     );
@@ -331,20 +300,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppTheme.braaiCoalSurface,
-          borderRadius: BorderRadius.circular(12),
-        ),
+        decoration: BoxDecoration(color: AppTheme.braaiCoalSurface, borderRadius: BorderRadius.circular(12)),
         child: Column(
           children: [
             Icon(icon, color: AppTheme.braaiFireOrange, size: 28),
             const SizedBox(height: 8),
-            Text(value,
-                style: const TextStyle(
-                  color: AppTheme.whitePure,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                )),
+            Text(value, style: const TextStyle(color: AppTheme.whitePure, fontSize: 24, fontWeight: FontWeight.bold)),
             Text(label, style: const TextStyle(color: AppTheme.softAshGray, fontSize: 12)),
           ],
         ),
@@ -353,24 +314,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Widget _buildOrderCard(String orderId, Map<String, dynamic> order) {
-    final status = order['status']?? 'ready_for_pickup';
+    final status = order['status']?? 'packing_up';
     final customerName = order['customerName']?? 'Customer';
-    final address = order['deliveryAddress']?? order['address']?? 'No address';
+    final address = order['deliveryAddress']?? 'No address';
     final total = order['total']?.toDouble()?? 0.0;
-    final driverId = order['driverId'];
-    final isAssignedToMe = driverId == uid;
+    final assignedDriver = order['assignedDriver'];
+    final isAssignedToMe = assignedDriver == uid;
 
     String buttonText = 'Accept Order';
     Color statusColor = Colors.orange;
     VoidCallback? onPressed;
     bool showMapButton = false;
 
-    if (status == 'ready_for_pickup') {
+    if (status == 'packing_up') {
+      buttonText = 'Accept Order';
+      statusColor = Colors.blue;
+      onPressed = () => _acceptOrder(orderId);
+    } else if (status == 'ready_for_driver') {
       buttonText = 'Accept Order';
       statusColor = Colors.orange;
       onPressed = () => _acceptOrder(orderId);
-    } else if (status == 'packing_up' && isAssignedToMe) {
-      buttonText = 'Packing Up - Wait for Dispatch';
+    } else if (status == 'awaiting_final_dispatch' && isAssignedToMe) {
+      buttonText = 'Waiting for Staff Handover';
       statusColor = Colors.amber;
       onPressed = null;
     } else if (status == 'on_the_way' && isAssignedToMe) {
@@ -381,8 +346,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
 
     String statusText = status.toUpperCase().replaceAll('_', ' ');
-    if (status == 'ready_for_pickup') statusText = 'READY FOR PICKUP';
-    if (status == 'packing_up') statusText = 'PACKING UP';
+    if (status == 'packing_up') statusText = 'PACKING';
+    if (status == 'ready_for_driver') statusText = 'READY FOR PICKUP';
+    if (status == 'awaiting_final_dispatch') statusText = 'WAITING STAFF';
     if (status == 'on_the_way') statusText = 'ON THE WAY';
 
     return Card(
@@ -396,22 +362,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Order #${orderId.substring(0, 6)}',
-                    style: const TextStyle(
-                      color: AppTheme.whitePure,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    )),
+                Text('Order #${orderId.substring(0, 6)}', style: const TextStyle(color: AppTheme.whitePure, fontSize: 16, fontWeight: FontWeight.bold)),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: statusColor.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    statusText,
-                    style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold),
-                  ),
+                  decoration: BoxDecoration(color: statusColor.withOpacity(0.2), borderRadius: BorderRadius.circular(6)),
+                  child: Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
                 ),
               ],
             ),
@@ -428,10 +383,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               children: [
                 const Icon(Icons.location_on, color: AppTheme.softAshGray, size: 16),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: Text(address,
-                      style: const TextStyle(color: AppTheme.softAshGray, fontSize: 13)),
-                ),
+                Expanded(child: Text(address, style: const TextStyle(color: AppTheme.softAshGray, fontSize: 13))),
                 if (showMapButton)
                   IconButton(
                     icon: const Icon(Icons.navigation, color: AppTheme.braaiFireOrange),
@@ -445,11 +397,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               children: [
                 const Icon(Icons.attach_money, color: AppTheme.softAshGray, size: 16),
                 const SizedBox(width: 8),
-                Text('R${total.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      color: AppTheme.braaiFireOrange,
-                      fontWeight: FontWeight.bold,
-                    )),
+                Text('R${total.toStringAsFixed(2)}', style: const TextStyle(color: AppTheme.braaiFireOrange, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 16),
@@ -458,11 +406,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               child: ElevatedButton(
                 onPressed: onPressed,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: status == 'packing_up' 
-                    ? Colors.amber 
-                      : status == 'ready_for_pickup' 
-                        ? Colors.orange 
-                          : AppTheme.braaiFireOrange,
+                  backgroundColor: statusColor,
                   foregroundColor: Colors.black,
                   disabledBackgroundColor: Colors.grey.shade700,
                   disabledForegroundColor: Colors.grey.shade400,
@@ -479,7 +423,6 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 }
 
-// QR Scanner Screen
 class QRScannerScreen extends StatefulWidget {
   final String expectedOrderId;
   const QRScannerScreen({super.key, required this.expectedOrderId});
@@ -495,10 +438,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Scan Customer QR'),
-        backgroundColor: AppTheme.braaiCoalSurface,
-      ),
+      appBar: AppBar(title: const Text('Scan Customer QR'), backgroundColor: AppTheme.braaiCoalSurface),
       body: MobileScanner(
         controller: cameraController,
         onDetect: (capture) {
@@ -512,10 +452,7 @@ class _QRScannerScreenState extends State<QRScannerScreen> {
               break;
             } else if (code!= null) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Wrong QR code. Scan customer order QR'),
-                  backgroundColor: Colors.red,
-                ),
+                const SnackBar(content: Text('Wrong QR code. Scan customer order QR'), backgroundColor: Colors.red),
               );
             }
           }

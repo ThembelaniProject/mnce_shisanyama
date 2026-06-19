@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../home/home_screen.dart';
 import '../admin/admin_home.dart';
 import '../driver/driver_home_screen.dart';
+import '../staff/StaffHomeScreen.dart'; // <-- Add this import
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -48,12 +49,18 @@ class _LoginScreenState extends State<LoginScreen> {
       final role = userDoc.data()?['role'] ?? 'customer';
 
       Widget nextScreen;
-      if (role == 'admin') {
-        nextScreen = const AdminHomeScreen();
-      } else if (role == 'driver') {
-        nextScreen = const DriverHomeScreen();
-      } else {
-        nextScreen = const ShisanyamaMainScreen();
+      switch (role) {
+        case 'admin':
+          nextScreen = const AdminHomeScreen();
+          break;
+        case 'driver':
+          nextScreen = const DriverHomeScreen();
+          break;
+        case 'staff':
+          nextScreen = const StaffHomeScreen(); // <-- Fixed
+          break;
+        default:
+          nextScreen = const ShisanyamaMainScreen();
       }
 
       Navigator.pushReplacement(
@@ -280,7 +287,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: _forgotPassword, // <-- Now works
+                      onPressed: _forgotPassword,
                       child: const Text("Forgot Password?", style: TextStyle(color: AppTheme.braaiBasteGold)),
                     ),
                   ),

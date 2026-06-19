@@ -1,11 +1,13 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/cart_item.dart';
 import '../../services/cart_service.dart';
-import '../driver/driver_home_screen.dart'; //
-import 'package:firebase_auth/firebase_auth.dart'; 
+import '../orders/OrderTrackerScreen.dart';
 
 class OrderProcessingScreen extends StatefulWidget {
   final double orderTotal;
@@ -23,12 +25,11 @@ class OrderProcessingScreen extends StatefulWidget {
   State<OrderProcessingScreen> createState() => _OrderProcessingScreenState();
 }
 
-class _OrderProcessingScreenState extends State<OrderProcessingScreen> 
+class _OrderProcessingScreenState extends State<OrderProcessingScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  int _secondsLeft = 120; // 2 minutes
-  String _statusText = "We're preparing your order";
-  
+  String _statusText = "Placing your order...";
+
   @override
   void initState() {
     super.initState();
@@ -36,67 +37,62 @@ class _OrderProcessingScreenState extends State<OrderProcessingScreen>
       duration: const Duration(seconds: 2),
       vsync: this,
     )..repeat();
-    
-    _processOrder();
+    _createOrder();
   }
 
-  Future<void> _processOrder() async {
-  // 1. Save order to Firebase first
-  final orderRef = await FirebaseFirestore.instance.collection('orders').add({
-    'status': 'packing',
-    'total': widget.orderTotal,
-    'deliveryAddress': widget.deliveryAddress,
-    'customerName': FirebaseAuth.instance.currentUser?.displayName?? 'Customer',
-    'items': widget.cartItems.map((e) => {
-      'name': e.menuItem.name,
-      'quantity': e.quantity,
-      'spice': e.spicePreference,
-      'notes': e.notes,
-      'price': e.menuItem.price,
-    }).toList(),
-    'createdAt': FieldValue.serverTimestamp(),
-    'packedAt': null,
-    'assignedDriver': null,
-  });
+  Future<void> _createOrder() async {
+    try {
+      final orderRef = await FirebaseFirestore.instance.collection('orders').add({
+        'status': 'pending',
+        'total': widget.orderTotal,
+        'deliveryAddress': widget.deliveryAddress,
+        'customerId': FirebaseAuth.instance.currentUser?.uid,
+        'customerName': FirebaseAuth.instance.currentUser?.displayName ?? 'Customer',
+        'items': widget.cartItems.map((e) => {
+          'name': e.menuItem.name,
+          'quantity': e.quantity,
+          'spice': e.spicePreference,
+          'notes': e.notes,
+          'price': e.menuItem.price,
+        }).toList(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'acceptedAt': null,
+        'approvedAt': null,
+        'dispatchedAt': null,
+        'deliveredAt': null,
+        'assignedDriver': null,
+        'assignedDriverName': null,
+        'approvedBy': null,
+        'dispatchedBy': null,
+      });
 
-  // 2. Clear cart immediately
-  CartService().clear();
-  
-  // 3. 2-minute countdown
-  for (int i = 120; i > 0; i--) {
-    if (!mounted) return;
-    await Future.delayed(const Duration(seconds: 1));
-    setState(() {
-      _secondsLeft = i - 1;
-      if (i <= 60) _statusText = "Almost ready...";
-      if (i <= 30) _statusText = "Packing complete soon";
-    });
-  }
+      CartService().clear();
 
-  // 4. Mark as ready for pickup
-  await orderRef.update({
-    'status': 'ready_for_pickup',
-    'packedAt': FieldValue.serverTimestamp(),
-  });
-  
-  if (mounted) {
-    Navigator.pushReplacement(
-      context, 
-      MaterialPageRoute(builder: (_) => const DriverHomeScreen())
-    );
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OrderTrackerScreen(orderId: orderRef.id),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to create order: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        Navigator.pop(context);
+      }
+    }
   }
-}
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
-  }
-
-  String _formatTime(int seconds) {
-    final mins = seconds ~/ 60;
-    final secs = seconds % 60;
-    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -130,23 +126,17 @@ class _OrderProcessingScreenState extends State<OrderProcessingScreen>
                 const SizedBox(height: 12),
                 Text(
                   _statusText,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 16,
                     color: AppTheme.softAshGray,
                   ),
                 ),
                 const SizedBox(height: 16),
-                Text(
-                  _formatTime(_secondsLeft),
-                  style: const TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.braaiBasteGold,
-                  ),
-                ),
+                const CircularProgressIndicator(color: AppTheme.braaiBasteGold),
                 const SizedBox(height: 40),
                 Card(
                   color: AppTheme.braaiCoalSurface,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -168,8 +158,8 @@ class _OrderProcessingScreenState extends State<OrderProcessingScreen>
                         const SizedBox(height: 12),
                         Row(
                           children: [
-                            FaIcon(FontAwesomeIcons.locationDot, 
-                              color: AppTheme.braaiFireOrange, size: 14),
+                            FaIcon(FontAwesomeIcons.locationDot,
+                                color: AppTheme.braaiFireOrange, size: 14),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
@@ -182,8 +172,8 @@ class _OrderProcessingScreenState extends State<OrderProcessingScreen>
                         const SizedBox(height: 8),
                         Row(
                           children: [
-                            FaIcon(FontAwesomeIcons.basketShopping, 
-                              color: AppTheme.braaiFireOrange, size: 14),
+                            FaIcon(FontAwesomeIcons.basketShopping,
+                                color: AppTheme.braaiFireOrange, size: 14),
                             const SizedBox(width: 8),
                             Text(
                               "${widget.cartItems.length} items",
